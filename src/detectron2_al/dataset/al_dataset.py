@@ -367,7 +367,8 @@ class ActiveLearningDataset:
 
         self._round += 1
         allocated_budget = self.budget.allocate(self._round, _as='image')
-        selected_image_ids = random.sample(list(self.coco.imgs.keys()), allocated_budget)
+#         selected_image_ids = random.sample(list(self.coco.imgs.keys()), allocated_budget)
+        selected_image_ids = list(self.coco.imgs.keys())[:allocated_budget] # change this to sample fixed image ids
         self.create_dataset_with_image_ids(selected_image_ids)
 
     def create_new_dataset(self):
