@@ -9,7 +9,12 @@ detectron2
 1. Change configs parameters
 2. Run AL training 
 ```
-python train_al_model.py --dataset_name [dataset name registered in DatasetCatalog] --json_annotation_train [training_annot.json] --image_path_train [training_image_folder] --json_annotation_val [val_annot.json] --image_path_val [val_image_folder]
+python train_al_model.py --config-file [cfg_file_path] \
+                         --dataset_name [dataset name registered in DatasetCatalog] \
+                         --json_annotation_train [training_annot.json] \
+                         --image_path_train [training_image_folder] \
+                         --json_annotation_val [val_annot.json] \
+                         --image_path_val [val_image_folder]
 ```
 
 ## Project structure
