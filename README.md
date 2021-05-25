@@ -1,4 +1,5 @@
 # Detectron2 for Active Learning in Object Detection 
+This repo is originally forked from https://github.com/lolipopshock/Detectron2_AL
 
 ## Requirements
 torch
