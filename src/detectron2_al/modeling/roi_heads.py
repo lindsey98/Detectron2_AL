@@ -1,3 +1,5 @@
+# https://github.com/lolipopshock/Detectron2_AL/tree/7eb444e165f1aea6b3e1930ba0097dcaadf4c705/src/detectron2_al
+
 import layoutparser as lp
 from typing import Dict, List, Optional, Tuple, Union
 import torch
@@ -11,15 +13,37 @@ from detectron2.utils.registry import Registry
 from detectron2.modeling.roi_heads.fast_rcnn import FastRCNNOutputLayers, FastRCNNOutputs
 from detectron2.modeling.roi_heads.roi_heads import ROIHeads, StandardROIHeads, ROI_HEADS_REGISTRY
 from detectron2.structures.boxes import Boxes
-from .utils import *
+
+import sys
+# sys.path.append("..") 
 from ..scoring_utils import elementwise_iou
+from detectron2.modeling.box_regression import Box2BoxTransform
+import torch.nn.functional as F
 
 __all__ = ['ROIHeadsAL']
 
 
+def one_vs_two_scoring(probs):
+    """Compute the one_vs_two_scores for the input probabilities
+    Args:
+        probs (torch.Tensor): NxC tensor
+    
+    Returns: 
+        scores (torch.Tensor): N tensor 
+            the one_vs_two_scores
+    """
+
+    N, C = probs.shape
+    assert C>=2, "the number of classes must be more than 1"
+
+    sorted_probs, _  = probs.sort(dim=-1, descending=True)
+
+    return (1 - (sorted_probs[:, 0] - sorted_probs[:, 1]))
+
 def calculate_ce_scores(p, q, num_shifts):
     # use crossentropy for calculation diff
     diff = - (p * torch.log(q)).mean(dim=-1)
+
     # aggregate the statistics for each prediction
     diff = torch.Tensor([scores.mean() for scores in diff.split(num_shifts)]) 
 
@@ -65,6 +89,10 @@ class ROIHeadsAL(StandardROIHeads):
             self.object_scoring_func = self._random_scoring
         elif cfg.AL.OBJECT_SCORING == 'perturbation':
             self.object_scoring_func = self._perturbation_scoring
+        elif cfg.AL.OBJECT_SCORING == 'entropy':
+            self.object_scoring_func = self._entropy
+        elif cfg.AL.OBJECT_SCORING == 'feature_emb':
+            self.object_scoring_func = self._feature_embedding_scoring
         else:
             raise NotImplementedError
         
@@ -79,7 +107,23 @@ class ROIHeadsAL(StandardROIHeads):
         else:
             raise NotImplementedError
 
+    def _feature_embed(self, features):
+        '''Obtain feature embeddings from backbone'''
+        # Avgpool over channels
+        features_heatmaps = [torch.mean(features[k], dim=1) for k in features.keys()]
+        
+        # Adaptive pooling 2D --> Tensor(shape 5x8x8)]
+        pooled_heatmaps = torch.cat([F.adaptive_avg_pool2d(f_map[None, ...], output_size=(8, 8)) \
+                                     .view(1, 8, 8).detach().cpu() \
+                                     for f_map in features_heatmaps], dim=0)
+        pooled_heatmaps = pooled_heatmaps.view(-1)
+        
+        return pooled_heatmaps
+    
+    
     def estimate_for_proposals(self, features, proposals):
+        '''Inference on given proposals'''
+        box2box_transform = Box2BoxTransform(weights=self.cfg.MODEL.ROI_BOX_HEAD.BBOX_REG_WEIGHTS)
 
         with torch.no_grad():
             features = [features[f] for f in self.in_features]
@@ -91,18 +135,17 @@ class ROIHeadsAL(StandardROIHeads):
             del box_features
 
             outputs = FastRCNNOutputs(
-                self.box2box_transform,
+                box2box_transform,
                 pred_class_logits,
                 pred_proposal_deltas,
                 proposals,
-                self.smooth_l1_beta)
+                self.cfg.MODEL.ROI_BOX_HEAD.SMOOTH_L1_BETA)
         
         return outputs
-
-    def generate_image_scores(self, features, proposals):
-
-        detected_objects_with_given_scores = \
-            self.generate_object_scores(features, proposals)
+    
+    def generate_image_scores(self, features, proposals, feature_refs):
+        '''Aggregate scores for image'''
+        detected_objects_with_given_scores = self.generate_object_scores(features, proposals, feature_refs)
 
         image_scores = []
 
@@ -114,11 +157,12 @@ class ROIHeadsAL(StandardROIHeads):
 
         return image_scores
     
-    def generate_object_scores(self, features, proposals, with_image_scores=False):
-        
+    
+    def generate_object_scores(self, features, proposals, feature_refs, with_image_scores=False):
+        '''Compute scores for proposals'''
         outputs = self.estimate_for_proposals(features, proposals)            
 
-        detected_objects_with_given_scores = self.object_scoring_func(outputs, features=features)
+        detected_objects_with_given_scores = self.object_scoring_func(outputs, features=features, feature_refs=feature_refs)
 
         if not with_image_scores:
             return detected_objects_with_given_scores
@@ -140,8 +184,9 @@ class ROIHeadsAL(StandardROIHeads):
         """
 
         cur_detections, filtered_indices = \
-            outputs.inference(self.test_score_thresh, self.test_nms_thresh, 
-                              self.test_detections_per_img)
+            outputs.inference(self.cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST,
+                               self.cfg.MODEL.ROI_HEADS.NMS_THRESH_TEST, 
+                               self.cfg.TEST.DETECTIONS_PER_IMAGE)
 
         pred_probs = outputs.predict_probs()
         # The predicted probabilities are a list of size batch_size
@@ -150,9 +195,13 @@ class ROIHeadsAL(StandardROIHeads):
                             (idx, prob) in zip(filtered_indices, pred_probs)]
         
         for cur_detection, object_score in zip(cur_detections, object_scores):
-            cur_detection.scores_al = object_score
+            if len(cur_detection) == 0: # no prediction
+                cur_detection.scores_al = cur_detection.scores
+            else:                    
+                cur_detection.scores_al = object_score
 
         return cur_detections
+    
 
     def _least_confidence_scoring(self, outputs, **kwargs):
         """
@@ -160,13 +209,39 @@ class ROIHeadsAL(StandardROIHeads):
         """
 
         cur_detections, filtered_indices = \
-            outputs.inference(self.test_score_thresh, self.test_nms_thresh, 
-                              self.test_detections_per_img)
-
+            outputs.inference(self.cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST,
+                               self.cfg.MODEL.ROI_HEADS.NMS_THRESH_TEST, 
+                               self.cfg.TEST.DETECTIONS_PER_IMAGE)
+        
         for cur_detection in cur_detections:
-            cur_detection.scores_al = (1-cur_detection.scores)**2
+            if len(cur_detection) == 0: # no prediction
+                cur_detection.scores_al = cur_detection.scores
+            else:            
+                cur_detection.scores_al = (1-cur_detection.scores)**2
 
         return cur_detections
+    
+
+    def _entropy(self, outputs, **kwargs):
+        """
+        Comput the entropy scores for the objects in the fasterrcnn outputs 
+        """
+        
+        cur_detections, filtered_indices = \
+            outputs.inference(self.cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST,
+                               self.cfg.MODEL.ROI_HEADS.NMS_THRESH_TEST, 
+                               self.cfg.TEST.DETECTIONS_PER_IMAGE)
+        
+        raw_probs = [prob[idx] for (idx, prob) in zip(filtered_indices, outputs.predict_probs())]
+        
+        for raw_prob, cur_detection in zip(raw_probs, cur_detections):
+            if len(cur_detection) == 0: # no prediction
+                cur_detection.scores_al = cur_detection.scores
+            else:
+                cur_detection.scores_al = calculate_ce_scores(raw_prob, raw_prob, 1) # set num_shifts=1, no split
+
+        return cur_detections
+    
 
     def _random_scoring(self, outputs, **kwargs):
         """
@@ -174,12 +249,16 @@ class ROIHeadsAL(StandardROIHeads):
         """
 
         cur_detections, filtered_indices = \
-            outputs.inference(self.test_score_thresh, self.test_nms_thresh, 
-                              self.test_detections_per_img)
+            outputs.inference(self.cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST,
+                               self.cfg.MODEL.ROI_HEADS.NMS_THRESH_TEST, 
+                               self.cfg.TEST.DETECTIONS_PER_IMAGE)
 
         device = cur_detections[0].scores.device
         for cur_detection in cur_detections:
-            cur_detection.scores_al = torch.rand(cur_detection.scores.shape).to(device)
+            if len(cur_detection) == 0: # no prediction
+                cur_detection.scores_al = cur_detection.scores
+            else:
+                cur_detection.scores_al = torch.rand(cur_detection.scores.shape).to(device)
 
         return cur_detections
 
@@ -213,12 +292,13 @@ class ROIHeadsAL(StandardROIHeads):
                         for params in sum(derived_shift, [])]
         return len(matrices), torch.stack(matrices, dim=-1).to(self.device)
 
-    def _perturbation_scoring(self, raw_outputs, features):
-        
+    def _perturbation_scoring(self, raw_outputs, features, **kwargs):
+        '''Compute the perturbation scores'''
         # Obtain the raw prediction boxes and probabilities
         raw_detections, raw_indices = \
-            raw_outputs.inference(self.test_score_thresh, self.test_nms_thresh, 
-                            self.test_detections_per_img)
+            raw_outputs.inference(self.cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST,
+                                  self.cfg.MODEL.ROI_HEADS.NMS_THRESH_TEST, 
+                                  self.cfg.TEST.DETECTIONS_PER_IMAGE)
         
         raw_probs = [prob[idx] for (idx, prob) 
                         in zip(raw_indices, raw_outputs.predict_probs())]
@@ -285,3 +365,29 @@ class ROIHeadsAL(StandardROIHeads):
                 raw_det.scores_al = diff
         
         return raw_detections
+    
+    def _feature_embedding_scoring(self, outputs, features, feature_refs):
+        '''Compute feature embedding score'''
+        # Obtain the raw prediction boxes and probabilities
+        cur_detections, filtered_indices = \
+            outputs.inference(self.cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST,
+                              self.cfg.MODEL.ROI_HEADS.NMS_THRESH_TEST, 
+                              self.cfg.TEST.DETECTIONS_PER_IMAGE)
+        
+        # Get euclidean distances w.r.t. reference feature embeddings
+        heatmap_emb = self._feature_embed(features).view(1, -1)
+        
+        # Compute cosine similarity
+        normalize_emb = F.normalize(heatmap_emb, p=2, dim=1)
+        normalize_refs = F.normalize(feature_refs, p=2, dim=1)
+        
+        cosine_sims = torch.matmul(normalize_emb, normalize_refs.T)
+        max_sim = torch.max(cosine_sims)
+        
+        for cur_detection in cur_detections:
+            if len(cur_detection) == 0:
+                cur_detection.scores_al = cur_detection.scores
+            else:
+                cur_detection.scores_al = max_sim.item()*torch.ones_like(cur_detection.scores).to(self.device)
+
+        return cur_detections
