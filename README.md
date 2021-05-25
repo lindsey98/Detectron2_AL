@@ -1,7 +1,19 @@
 # Detectron2 for Active Learning in Object Detection 
 
+## Requirements
+torch
+torchvision
+detectron2 
+
+## Instructions
+1. Change configs parameters
+2. Run AL training 
+```
+python train_al_model.py --dataset_name [dataset name registered in DatasetCatalog] --json_annotation_train [training_annot.json] --image_path_train [training_image_folder] --json_annotation_val [val_annot.json] --image_path_val [val_image_folder]
+```
 
 ## Project structure
+
 
 ```
 src
@@ -58,4 +70,3 @@ src
             _C.AL.TRAINING.EPOCHS_PER_ROUND_DECAY = 'linear': Do you decay number of epochs of trainig for each AL round?
             
 ```
-
