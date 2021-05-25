@@ -35,7 +35,7 @@ def _write_json(data, filename):
         json.dump(data, fp)
 
 def _calculate_iterations(num_imgs, batch_size, num_epochs):
-    return int(num_imgs*num_epochs/batch_size)
+    return int(num_imgs * num_epochs/batch_size)
 
 def build_al_dataset(cfg):
 
@@ -47,9 +47,13 @@ def build_al_dataset(cfg):
         raise ValueError(f'Unknown active learning mode {cfg.AL.MODE}')
 
 class HandyCOCO(COCO):
-    
-    def subsample_with_image_ids(self, imgIds):
-        
+    '''
+       Inheritate from COCO, Handy class for COCO-like dataset to subsample imageIds
+    '''
+    def subsample_with_image_ids(self, imgIds): 
+        '''
+        Subsample annotations for certain image Ids
+        '''
         imgs = [self.imgs[idx] for idx in imgIds]
         anns = self.loadAnns(ids=self.getAnnIds(imgIds=imgIds))
         
@@ -64,22 +68,33 @@ class HandyCOCO(COCO):
         return dataset 
     
     def subsample_and_save_with_image_ids(self, imgIds, filename):
-        
+        '''
+        Write annotations into json files
+        '''
         dataset = self.subsample_with_image_ids(imgIds)
         _write_json(dataset, filename)
         
         return dataset
 
     def avg_object_per_image(self):
+        '''
+        Compute avg number of objects per image
+        '''
         return np.mean([len(self.getAnnIds([img])) for img in self.imgs])
 
 
 class Budget(object):
+    """
+        A handy class for controlling budgets in terms of either number of images/objects
+        Attributes:
+            remaining: how many budgets remained
+            initial: how many total budgets are allowed
+        Methods:
+            allocate: allocate budget to this round in terms of either number of images/objects
+    """
     
     def __init__(self, cfg, avg_object_per_image):
-        """
-        A handy class for controlling budgets
-        """
+
         
         self.style = cfg.AL.MODE
         assert self.style in ['object', 'image']
@@ -89,12 +104,14 @@ class Budget(object):
         self.eta = cfg.AL.OBJECT_FUSION.BUDGET_ETA
 
         self.avg_object_per_image = avg_object_per_image
+        # this is the total budget for whole AL algorithm
         if self.style == 'object':
-            self._initial = self._remaining = cfg.AL.DATASET.IMAGE_BUDGET*avg_object_per_image
+            self._initial = self._remaining = cfg.AL.DATASET.IMAGE_BUDGET*avg_object_per_image 
         elif self.style == 'image':
-            self._initial = self._remaining = cfg.AL.DATASET.IMAGE_BUDGET
+            self._initial = self._remaining = cfg.AL.DATASET.IMAGE_BUDGET 
 
-        if self.allocation_method == 'linear':
+        if self.allocation_method == 'linear': 
+            # allocate equal budget into every AL cycle e.g. self.initial=100, self._allocations = [10, 10, 10, 10 ....]
             self._allocations = np.ones(self.total_rounds)*round(self.initial / self.total_rounds)
         else:
             raise NotImplementedError 
@@ -129,28 +146,30 @@ class Budget(object):
         return self._initial
 
     def all_allocations(self, _as=None):
-
+        '''
+        Total allocations convert to number of images/objects
+        '''
         if _as is not None and _as != self.style:
             if _as == 'object':
-                # originally image
+                # convert how many images are allocated ==> how many objects are allocated to this round
                 return self._allocations * self.avg_object_per_image
             elif _as == 'image':
-                # originally object
+                # convert how many objects are allocated ==> how many images are allocated to this round
                 return self._allocations // self.avg_object_per_image
         else:
-            return self._allocations 
+            return self._allocations  
 
     def allocate(self, _round, _as=None):
 
-        allocated = self._allocations[_round]
-        
+        allocated = self._allocations[_round] # budget allocated to this round
         self._remaining -= allocated
+        
         if _as is not None and _as != self.style:
             if _as == 'object':
-                # originally image
+                # convert how many images are allocated ==> how many objects are allocated to this round
                 allocated = int(allocated * self.avg_object_per_image)
             elif _as == 'image':
-                # originally object
+                # convert how many objects are allocated ==> how many images are allocated to this round
                 allocated = int(round(allocated / self.avg_object_per_image))
         return allocated
 
@@ -176,7 +195,9 @@ class DatasetHistory(list):
 
 
 class EpochsPerRound(IntegerSchedular):
-
+    '''
+        How many epochs to train for each AL cycle
+    '''
     def __init__(self, cfg):
 
         steps = cfg.AL.TRAINING.ROUNDS 
@@ -187,20 +208,29 @@ class EpochsPerRound(IntegerSchedular):
 
 
 class ActiveLearningDataset:
+    '''
+    Class for AL dataset 
+    Methods:
+       add_new_dataset_into_catalogs: add new dataset name into catalogs
+       get_training_dataloader: get all currently labelled dataset to train
+       get_oracle_dataloader: get all unlabelled dataset to label
+       create_initial_dataset: create initial labelled set to initialize the model
+       create_new_dataset: create new dataloader
+    '''
 
     def __init__(self, cfg):
         
         # Dataset configurations
         self.name = cfg.AL.DATASET.NAME
-        self.image_root = cfg.AL.DATASET.IMG_ROOT
-        self.anno_path = cfg.AL.DATASET.ANNO_PATH
+        self.image_root = cfg.AL.DATASET.IMG_ROOT # path to images
+        self.anno_path = cfg.AL.DATASET.ANNO_PATH # path to json annot file
         self.cache_dir = os.path.join(cfg.OUTPUT_DIR, cfg.AL.DATASET.CACHE_DIR)
         if not os.path.exists(self.cache_dir):
             os.makedirs(self.cache_dir)
-        self.coco = HandyCOCO(self.anno_path)
-        self.name_prefix = cfg.AL.DATASET.NAME_PREFIX
+        self.coco = HandyCOCO(self.anno_path) # construct datadict
+        self.name_prefix = cfg.AL.DATASET.NAME_PREFIX # add prefix to distinguish from the original dataset name
 
-        # Add the base version of the dataset to the catalog
+        # Add the initial version of the dataset to the catalog
         self.add_new_dataset_into_catalogs(self.name, self.anno_path)
 
         # Scheduling
@@ -213,8 +243,8 @@ class ActiveLearningDataset:
 
         # Internal Storage
         self._history = DatasetHistory()
-        self._round = -1
-        self._cfg = cfg.clone()
+        self._round = -1 # start with round -1
+        self._cfg = cfg.clone() # clone original cfg
         self._cfg.freeze()
         
     def calculate_iterations_for_cur_datasets(self):
@@ -254,7 +284,7 @@ class ActiveLearningDataset:
     def add_new_dataset_into_catalogs(self, name, json_path):
         
         if name not in DatasetCatalog.list():
-
+            # register coco dataset
             register_coco_instances(
                 name = name,
                 metadata = {}, 
@@ -368,7 +398,7 @@ class ActiveLearningDataset:
         self._round += 1
         allocated_budget = self.budget.allocate(self._round, _as='image')
 #         selected_image_ids = random.sample(list(self.coco.imgs.keys()), allocated_budget)
-        selected_image_ids = list(self.coco.imgs.keys())[:allocated_budget] # change this to sample fixed image ids
+        selected_image_ids = list(self.coco.imgs.keys())[:allocated_budget] # FIXME: change this to sample fixed image ids
         self.create_dataset_with_image_ids(selected_image_ids)
 
     def create_new_dataset(self):
@@ -383,7 +413,9 @@ class ActiveLearningDataset:
         self._history.save(os.path.join(self.cache_dir, 'labeling_history.json'))
 
 class ImageActiveLearningDataset(ActiveLearningDataset):
-
+    '''
+    Inheritated from ActiveLearningDataset with create_new_dataset rewritten
+    '''
     def create_new_dataset(self, image_scores:List[Tuple]):
         """
         args:
@@ -391,7 +423,7 @@ class ImageActiveLearningDataset(ActiveLearningDataset):
                 a list of tuples (image_score, image_id)
         """
 
-        super().create_new_dataset()
+        super().create_new_dataset() # round += 1
 
         allocated_budget = self.budget.allocate(self._round, _as='object')
         if self.sampling_method == 'top':
@@ -399,15 +431,17 @@ class ImageActiveLearningDataset(ActiveLearningDataset):
             selected_image_ids = []
 
             while allocated_budget>0:
-                score, idx = top_image_scores.pop()
+                score, idx = top_image_scores.pop() 
                 selected_image_ids.append(idx)
-
                 num_objects = len(self.coco.getAnnIds([idx]))
-                allocated_budget -= num_objects
+                allocated_budget -= num_objects # deduct from budget
         else:
             raise NotImplementedError
         
+        # create dataset with imageIds selected by AL
         self.create_dataset_with_image_ids(selected_image_ids)
+        
+        
 
 class ObjectActiveLearningDataset(ActiveLearningDataset):
 
@@ -430,7 +464,7 @@ class ObjectActiveLearningDataset(ActiveLearningDataset):
         if self.sampling_method == 'top':
             sorted_image_scores = np.argsort(image_scores).tolist()
 
-            while allocated_budget>used_budget and sorted_image_scores!=[]:
+            while allocated_budget > used_budget and sorted_image_scores != []:
 
                 idx = sorted_image_scores.pop()
                 image_id = fused_results[idx]['image_id']
@@ -446,6 +480,7 @@ class ObjectActiveLearningDataset(ActiveLearningDataset):
                             self.budget.eta * fused_results[idx]['recovered_inst']
                 used_budget += round(cur_cost)
                 
+                # Use the prediction results to label?
                 labeling_history.append({
                     "image_id":            fused_results[idx]['image_id'],
                     "labeled_inst_from_gt":fused_results[idx]['labeled_inst_from_gt'],
@@ -459,6 +494,7 @@ class ObjectActiveLearningDataset(ActiveLearningDataset):
                                              selected_image_ids, 
                                              labeling_history,
                                              num_objects=round(used_budget))
+        # Do a evaluation
         dataset_eval = self.evaluate_merged_dataset(self._round)
         pd.Series(dataset_eval).to_csv(self.cur_dataset_jsonpath.replace('.json', 'eval.csv'))
 

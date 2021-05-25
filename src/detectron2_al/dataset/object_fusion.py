@@ -106,11 +106,12 @@ class ObjectFusion:
         fusion_ratio = self.fusion_ratio[round]
         gt_boxes = gt['instances'].gt_boxes.to(self.device)
         pred_boxes = pred.pred_boxes.to(self.device)
-
+        
+        # If fusion_ratio is 0.8, then we want to find all objects that have scores more than 0.2(=1-0.8) quantile. 
+        # If fusion_ratio is 0, then we do not add pred_boxes
         score_al_th = _quantile(pred.scores_al, 1-fusion_ratio) 
-        # If fusion_ratio is 0.8, then we want to find all objects that 
-        # have scores more than 0.2(=1-0.8) quantile. 
         selected_pred_indices = torch.where(pred.scores_al > score_al_th)[0].to(self.device)
+        
         
         if len(selected_pred_indices)<= 0:
             # For some rounding issues, we might catch no indices. 
@@ -259,7 +260,9 @@ class ObjectFusion:
         return {'instances': r, 'image_id': gt['image_id']}
 
     def _duplicate_gt_as_output(self, gt):
-
+        '''
+        Do not use any predicted boxes
+        '''
         copied =  Instances(gt['instances'].image_size,
                     pred_boxes = gt['instances'].gt_boxes.to('cpu'),
                     pred_classes = gt['instances'].gt_classes.to('cpu'),
@@ -271,3 +274,4 @@ class ObjectFusion:
         result['dropped_inst_from_pred'] = 0
         result['recovered_inst']         = 0
         return result
+    
