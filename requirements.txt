@@ -1,7 +1,0 @@
-layoutparser==0.1.1
-dataclasses
-funcy
-lxml
-imagesize
-beautifulsoup4
-SciencePlots
