@@ -17,10 +17,13 @@ from detectron2.data.datasets import register_coco_instances
 from detectron2.engine import default_argument_parser, default_setup, launch
 from detectron2.evaluation import verify_results
 
-sys.path.append('../src')
+sys.path.append('src')
 from detectron2_al.configs import get_cfg
 from detectron2_al.engine import build_al_trainer
 from detectron2_al.modeling import *
+
+os.environ["CUDA_VISIBLE_DEVICES"]="0"
+
 
 def setup(args):
     """
@@ -29,7 +32,7 @@ def setup(args):
     
     # Add the val dataset to detectron2 directory
     dataset_name = args.dataset_name
-    register_coco_instances(f"{dataset_name}-val",   {}, 
+    register_coco_instances(f"{dataset_name}-val", {}, 
                             args.json_annotation_val,   
                             args.image_path_val)
 
@@ -89,11 +92,11 @@ if __name__ == "__main__":
     parser = default_argument_parser()
 
     # Extra Configurations for dataset names and paths
-    parser.add_argument("--dataset_name",          default="", help="The Dataset Name")
+    parser.add_argument("--dataset_name", default="", help="The Dataset Name")
     parser.add_argument("--json_annotation_train", default="", metavar="FILE", help="The path to the training set JSON annotation")
-    parser.add_argument("--image_path_train",      default="", metavar="FILE", help="The path to the training set image folder")
-    parser.add_argument("--json_annotation_val",   default="", metavar="FILE", help="The path to the validation set JSON annotation")
-    parser.add_argument("--image_path_val",        default="", metavar="FILE", help="The path to the validation set image folder")
+    parser.add_argument("--image_path_train", default="", metavar="FILE", help="The path to the training set image folder")
+    parser.add_argument("--json_annotation_val", default="", metavar="FILE", help="The path to the validation set JSON annotation")
+    parser.add_argument("--image_path_val", default="", metavar="FILE", help="The path to the validation set image folder")
 
     args = parser.parse_args()
     print("Command Line Args:", args)
