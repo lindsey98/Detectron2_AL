@@ -1,20 +1,20 @@
 _BASE_: "../base/faster_rcnn_R_50_FPN.yaml"
 AL:
   DATASET:
-    IMAGE_BUDGET: 2000
+    IMAGE_BUDGET: 5000 # total COCO training is 118K, TODO
   OBJECT_FUSION:
     BUDGET_ETA: 0.4
-    INITIAL_RATIO: 0.90
-    LAST_RATIO: 0.40
-    REMOVE_DUPLICATES_TH: 0.25
+    INITIAL_RATIO: 0.90  # fuse more pred_box with gt_box
+    LAST_RATIO: 0.40 
+    REMOVE_DUPLICATES_TH: 0.25 
   TRAINING:
-    EPOCHS_PER_ROUND_INITIAL: 20
-    EPOCHS_PER_ROUND_LAST: 10
-    ROUNDS: 10
+    EPOCHS_PER_ROUND_INITIAL: 30 # training epochs per AL cycle
+    EPOCHS_PER_ROUND_LAST: 20 # decay as # cycles grows
+    ROUNDS: 5 # number of AL cycles, TODO
 MODEL:
   ROI_HEADS:
-    SCORE_THRESH_TEST: 0.5
+    SCORE_THRESH_TEST: 0.5 
 SOLVER:
   IMS_PER_BATCH: 6
 TEST: 
-  DETECTIONS_PER_IMAGE: 100
+  DETECTIONS_PER_IMAGE: 100 
