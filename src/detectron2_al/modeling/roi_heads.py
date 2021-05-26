@@ -91,8 +91,8 @@ class ROIHeadsAL(StandardROIHeads):
             self.object_scoring_func = self._perturbation_scoring
         elif cfg.AL.OBJECT_SCORING == 'entropy':
             self.object_scoring_func = self._entropy
-        elif cfg.AL.OBJECT_SCORING == 'feature_emb':
-            self.object_scoring_func = self._feature_embedding_scoring
+#         elif cfg.AL.OBJECT_SCORING == 'feature_emb':
+#             self.object_scoring_func = self._feature_embedding_scoring
         else:
             raise NotImplementedError
         
@@ -366,28 +366,28 @@ class ROIHeadsAL(StandardROIHeads):
         
         return raw_detections
     
-    def _feature_embedding_scoring(self, outputs, features, feature_refs):
-        '''Compute feature embedding score'''
-        # Obtain the raw prediction boxes and probabilities
-        cur_detections, filtered_indices = \
-            outputs.inference(self.cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST,
-                              self.cfg.MODEL.ROI_HEADS.NMS_THRESH_TEST, 
-                              self.cfg.TEST.DETECTIONS_PER_IMAGE)
+#     def _feature_embedding_scoring(self, outputs, features, feature_refs):
+#         '''Compute feature embedding score'''
+#         # Obtain the raw prediction boxes and probabilities
+#         cur_detections, filtered_indices = \
+#             outputs.inference(self.cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST,
+#                               self.cfg.MODEL.ROI_HEADS.NMS_THRESH_TEST, 
+#                               self.cfg.TEST.DETECTIONS_PER_IMAGE)
         
-        # Get euclidean distances w.r.t. reference feature embeddings
-        heatmap_emb = self._feature_embed(features).view(1, -1)
+#         # Get euclidean distances w.r.t. reference feature embeddings
+#         heatmap_emb = self._feature_embed(features).view(1, -1)
         
-        # Compute cosine similarity
-        normalize_emb = F.normalize(heatmap_emb, p=2, dim=1)
-        normalize_refs = F.normalize(feature_refs, p=2, dim=1)
+#         # Compute cosine similarity
+#         normalize_emb = F.normalize(heatmap_emb, p=2, dim=1)
+#         normalize_refs = F.normalize(feature_refs, p=2, dim=1)
         
-        cosine_sims = torch.matmul(normalize_emb, normalize_refs.T)
-        max_sim = torch.max(cosine_sims)
+#         cosine_sims = torch.matmul(normalize_emb, normalize_refs.T)
+#         max_sim = torch.max(cosine_sims)
         
-        for cur_detection in cur_detections:
-            if len(cur_detection) == 0:
-                cur_detection.scores_al = cur_detection.scores
-            else:
-                cur_detection.scores_al = max_sim.item()*torch.ones_like(cur_detection.scores).to(self.device)
+#         for cur_detection in cur_detections:
+#             if len(cur_detection) == 0:
+#                 cur_detection.scores_al = cur_detection.scores
+#             else:
+#                 cur_detection.scores_al = max_sim.item()*torch.ones_like(cur_detection.scores).to(self.device)
 
-        return cur_detections
+#         return cur_detections
