@@ -92,7 +92,7 @@ class ROIHeadsAL(StandardROIHeads):
         elif cfg.AL.OBJECT_SCORING == 'entropy':
             self.object_scoring_func = self._entropy
         elif cfg.AL.OBJECT_SCORING == 'location': # define new uncertainty measure
-            self.object_scoring_func = self._location_scoring
+            self.object_scoring_func = self._location_tightness_scoring
         else:
             raise NotImplementedError
         
@@ -102,28 +102,25 @@ class ROIHeadsAL(StandardROIHeads):
             self.image_score_aggregation_func = torch.max
         elif cfg.AL.IMAGE_SCORE_AGGREGATION == 'sum':
             self.image_score_aggregation_func = torch.sum
-        elif cfg.AL.IMAGE_SCORE_AGGREGATION == 'location': # TODO: define this
-            self.image_score_aggregation_func = self._location_agg   
+        elif cfg.AL.IMAGE_SCORE_AGGREGATION == 'location': # for location tightness, it takes minimum 
+            self.image_score_aggregation_func = torch.min
         elif cfg.AL.IMAGE_SCORE_AGGREGATION == 'random':
             self.image_score_aggregation_func = lambda x: torch.rand(1)
         else:
             raise NotImplementedError
-            
-    def _location_agg():
-        '''Define aggregation function for location-tightness and location-robustness'''
 
-    def _feature_embed(self, features):
-        '''Obtain feature embeddings from backbone'''
-        # Avgpool over channels
-        features_heatmaps = [torch.mean(features[k], dim=1) for k in features.keys()]
+#     def _feature_embed(self, features):
+#         '''Obtain feature embeddings from backbone'''
+#         # Avgpool over channels
+#         features_heatmaps = [torch.mean(features[k], dim=1) for k in features.keys()]
         
-        # Adaptive pooling 2D --> Tensor(shape 5x8x8)]
-        pooled_heatmaps = torch.cat([F.adaptive_avg_pool2d(f_map[None, ...], output_size=(8, 8)) \
-                                     .view(1, 8, 8).detach().cpu() \
-                                     for f_map in features_heatmaps], dim=0)
-        pooled_heatmaps = pooled_heatmaps.view(-1)
+#         # Adaptive pooling 2D --> Tensor(shape 5x8x8)]
+#         pooled_heatmaps = torch.cat([F.adaptive_avg_pool2d(f_map[None, ...], output_size=(8, 8)) \
+#                                      .view(1, 8, 8).detach().cpu() \
+#                                      for f_map in features_heatmaps], dim=0)
+#         pooled_heatmaps = pooled_heatmaps.view(-1)
         
-        return pooled_heatmaps
+#         return pooled_heatmaps
     
     
     def estimate_for_proposals(self, features, proposals):
@@ -371,66 +368,36 @@ class ROIHeadsAL(StandardROIHeads):
         
         return raw_detections
     
+    ########################################################################################################################
+    # Implementation of Localization-Aware Active Learning for Object Detection (https://arxiv.org/pdf/1801.05124.pdf)
+    ########################################################################################################################
+    
     def _location_tightness_scoring(self, raw_outputs, features, proposals, **kwargs):
-        # TODO: I only implement location tightness
+        # I only implement location tightness, didnt include location stability for pratical issue (7 calls of forward inference)
         
-        # Obtain the raw prediction boxes and probabilities from PROPOSALS
-        outputs = self.estimate_for_proposals(features, proposals)
-        probs = outputs.predict_probs()
-        boxes = outputs.predict_boxes()
-        num_bbox_reg_classes = boxes[0].shape[1] // 4
-        num_shifts = 1
-        assert len(boxes) == len(proposals)
-
-        is_empty_raw_detections = [len(det)==0 for det in boxes]
-        scores4proposals = []
-        for is_empty, box, prob, proposal in zip(is_empty_raw_detections, boxes, probs, proposals):
-            
-            if is_empty: # no prediction
-                location_tight = torch.abs(0 + prob - 1) # missing box, very uncertain
-            else:
-                location_tight = torch.abs(calculate_iou_scores(box, proposals, num_shifts, num_bbox_reg_classes) + prob - 1)
-                
-            scores4proposals.append(location_tight)
-            
         # Because some predicted boxes will be filtered out after postprocessing
         raw_detections, raw_indices = raw_outputs.inference(self.cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST,
                                                             self.cfg.MODEL.ROI_HEADS.NMS_THRESH_TEST, 
                                                             self.cfg.TEST.DETECTIONS_PER_IMAGE)
+        pred_probs = [prob[idx] for (idx, prob) in zip(raw_indices, raw_outputs.predict_probs())]
         
-        for det, index in zip(raw_detections, raw_indices):
-            det.scores_al = scores4proposals[index]
+        is_empty_raw_detections = [len(det)==0 for det in raw_detections]
+        
+        for det, index, is_empty, prob in zip(raw_detections, raw_indices, is_empty_raw_detections, pred_probs):
+
+            if is_empty: # no prediction
+                location_tight = torch.abs(0 + prob - 1) # missing box, very uncertain
+            else:
+                print(det.shape[1] // 4)
+                location_tight = torch.abs(calculate_iou_scores(det, proposals[index], \
+                                                                num_shifts=1, \
+                                                                num_bbox_reg_classes=det.shape[1] // 4)  \
+                                           + prob - 1) # check this
+
+            det.scores_al = location_tight
+
 
         return raw_detections
                 
                 
 
-
-
-
-        
-#     def _feature_embedding_scoring(self, outputs, features, feature_refs):
-#         '''Compute feature embedding score'''
-#         # Obtain the raw prediction boxes and probabilities
-#         cur_detections, filtered_indices = \
-#             outputs.inference(self.cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST,
-#                               self.cfg.MODEL.ROI_HEADS.NMS_THRESH_TEST, 
-#                               self.cfg.TEST.DETECTIONS_PER_IMAGE)
-        
-#         # Get euclidean distances w.r.t. reference feature embeddings
-#         heatmap_emb = self._feature_embed(features).view(1, -1)
-        
-#         # Compute cosine similarity
-#         normalize_emb = F.normalize(heatmap_emb, p=2, dim=1)
-#         normalize_refs = F.normalize(feature_refs, p=2, dim=1)
-        
-#         cosine_sims = torch.matmul(normalize_emb, normalize_refs.T)
-#         max_sim = torch.max(cosine_sims)
-        
-#         for cur_detection in cur_detections:
-#             if len(cur_detection) == 0:
-#                 cur_detection.scores_al = cur_detection.scores
-#             else:
-#                 cur_detection.scores_al = max_sim.item()*torch.ones_like(cur_detection.scores).to(self.device)
-
-#         return cur_detections
