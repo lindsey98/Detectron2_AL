@@ -7,7 +7,22 @@ __all__ = ['ActiveLearningRCNN']
 
 @META_ARCH_REGISTRY.register()
 class ActiveLearningRCNN(GeneralizedRCNN):
-
+    
+    def __init__(self, cfg):
+        
+        super(ActiveLearningRCNN, self).__init__(cfg)
+        self.cfg = cfg
+    
+#     def _perturb_image(self, images):
+        
+#         if self.cfg.AL.OBJECT_SCORING == 'location': # N=6 noise levels
+            
+#         elif self.cfg.AL.OBJECT_SCORING == 'consistency': # horizontally flip the images  
+             
+#         else:
+#             raise NotImplementedError
+            
+        
     def _estimate_feature_proposal(self, batched_inputs):
         
         with torch.no_grad():
@@ -54,6 +69,10 @@ class ActiveLearningRCNN(GeneralizedRCNN):
         
         with torch.no_grad():
             features, rpn_proposals = self._estimate_feature_proposal(batched_inputs)
+            
+#         if self.cfg.AL.OBJECT_SCORING == 'location' or self.cfg.AL.OBJECT_SCORING == 'consistency':
+#             # generate perturbed images/horizontally flipped images etc.
+#             augment_images = self._perturb_image(images)
 
         detection_results = self.roi_heads.generate_object_scores(features, rpn_proposals)
     
